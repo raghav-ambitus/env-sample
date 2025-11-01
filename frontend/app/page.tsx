@@ -14,8 +14,7 @@ interface LevelData {
 
 export default function Home() {
   const [gameData, setGameData] = useState<GameInfo | null>(null)
-  const [selectedNumber, setSelectedNumber] = useState<number | null>(null)
-  const [isEraseMode, setIsEraseMode] = useState<boolean>(false)
+  const [selectedCell, setSelectedCell] = useState<{row: number, col: number} | null>(null)
 
   useEffect(() => {
     const eventSource = new EventSource('http://localhost:8000/events')
@@ -90,51 +89,19 @@ export default function Home() {
           row.map((cell, colIdx) => {
             const isWhite = cell === -1
             const isPlaced = cell !== -1 && gameData.numbers_available.includes(cell)
-            const canPlace = (isWhite || isPlaced) && selectedNumber !== null && !isEraseMode
-            const canErase = isPlaced && isEraseMode
+            const isSelected = selectedCell?.row === rowIdx && selectedCell?.col === colIdx
+            const canSelect = isWhite || isPlaced
             
             return (
               <div
                 key={`${rowIdx}-${colIdx}`}
-                onClick={async () => {
-                  if (isEraseMode && canErase) {
-                    try {
-                      const response = await fetch('http://localhost:8000/erase', {
-                        method: 'POST',
-                        headers: {
-                          'Content-Type': 'application/json',
-                        },
-                        body: JSON.stringify({
-                          row: rowIdx,
-                          col: colIdx
-                        })
-                      })
-                      const result = await response.json()
-                      if (!result.success) {
-                        console.error('Failed to erase:', result.message)
-                      }
-                    } catch (error) {
-                      console.error('Error erasing cell:', error)
-                    }
-                  } else if (canPlace) {
-                    try {
-                      const response = await fetch('http://localhost:8000/place', {
-                        method: 'POST',
-                        headers: {
-                          'Content-Type': 'application/json',
-                        },
-                        body: JSON.stringify({
-                          row: rowIdx,
-                          col: colIdx,
-                          number: selectedNumber
-                        })
-                      })
-                      const result = await response.json()
-                      if (!result.success) {
-                        console.error('Failed to place number:', result.message)
-                      }
-                    } catch (error) {
-                      console.error('Error placing number:', error)
+                onClick={() => {
+                  // Select cell (for placing numbers or erasing)
+                  if (canSelect) {
+                    if (isSelected) {
+                      setSelectedCell(null)
+                    } else {
+                      setSelectedCell({row: rowIdx, col: colIdx})
                     }
                   }
                 }}
@@ -148,23 +115,18 @@ export default function Home() {
                   alignItems: 'center',
                   fontSize: '3rem',
                   fontWeight: 'bold',
-                  border: '2px solid #aaa',
-                  cursor: (canPlace || canErase) ? 'pointer' : 'default',
-                  opacity: (canPlace || canErase) ? 0.8 : 1,
-                  transition: 'opacity 0.2s',
+                  border: isSelected ? '4px solid #ff8800' : '2px solid #aaa',
+                  cursor: canSelect ? 'pointer' : 'default',
+                  transition: 'opacity 0.2s, border 0.2s',
                 }}
                 onMouseEnter={(e) => {
-                  if (canPlace && isWhite) {
-                    e.currentTarget.style.backgroundColor = '#f0f0f0'
-                  } else if (canErase) {
-                    e.currentTarget.style.backgroundColor = '#ffebee'
+                  if (canSelect && !isSelected) {
+                    e.currentTarget.style.backgroundColor = isWhite ? '#f0f0f0' : '#333'
                   }
                 }}
                 onMouseLeave={(e) => {
-                  if (canPlace && isWhite) {
-                    e.currentTarget.style.backgroundColor = 'white'
-                  } else if (canErase) {
-                    e.currentTarget.style.backgroundColor = 'white'
+                  if (canSelect && !isSelected) {
+                    e.currentTarget.style.backgroundColor = isWhite ? 'white' : 'black'
                   }
                 }}
               >
@@ -183,31 +145,49 @@ export default function Home() {
         {gameData.numbers_available.map((num) => (
           <button
             key={num}
-            onClick={() => {
-              setSelectedNumber(selectedNumber === num ? null : num)
-              setIsEraseMode(false)
+            onClick={async () => {
+              if (selectedCell !== null) {
+                // Place number in selected cell
+                try {
+                  const response = await fetch('http://localhost:8000/place', {
+                    method: 'POST',
+                    headers: {
+                      'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                      row: selectedCell.row,
+                      col: selectedCell.col,
+                      number: num
+                    })
+                  })
+                  const result = await response.json()
+                  if (!result.success) {
+                    console.error('Failed to place number:', result.message)
+                  } else {
+                    setSelectedCell(null)
+                  }
+                } catch (error) {
+                  console.error('Error placing number:', error)
+                }
+              }
             }}
             style={{
               width: '80px',
               height: '80px',
-              backgroundColor: selectedNumber === num ? '#4CAF50' : '#555',
+              backgroundColor: '#555',
               color: 'white',
               fontSize: '2rem',
               fontWeight: 'bold',
-              border: selectedNumber === num ? '3px solid #fff' : 'none',
+              border: 'none',
               borderRadius: '8px',
               cursor: 'pointer',
-              transition: 'background-color 0.2s, border 0.2s'
+              transition: 'background-color 0.2s'
             }}
             onMouseEnter={(e) => {
-              if (selectedNumber !== num) {
-                e.currentTarget.style.backgroundColor = '#666'
-              }
+              e.currentTarget.style.backgroundColor = '#666'
             }}
             onMouseLeave={(e) => {
-              if (selectedNumber !== num) {
-                e.currentTarget.style.backgroundColor = '#555'
-              }
+              e.currentTarget.style.backgroundColor = '#555'
             }}
           >
             {num}
@@ -221,13 +201,33 @@ export default function Home() {
         gap: '1rem'
       }}>
         <button
-          onClick={() => {
-            setIsEraseMode(!isEraseMode)
-            setSelectedNumber(null)
+          onClick={async () => {
+            if (selectedCell !== null) {
+              try {
+                const response = await fetch('http://localhost:8000/erase', {
+                  method: 'POST',
+                  headers: {
+                    'Content-Type': 'application/json',
+                  },
+                  body: JSON.stringify({
+                    row: selectedCell.row,
+                    col: selectedCell.col
+                  })
+                })
+                const result = await response.json()
+                if (!result.success) {
+                  console.error('Failed to erase:', result.message)
+                } else {
+                  setSelectedCell(null)
+                }
+              } catch (error) {
+                console.error('Error erasing cell:', error)
+              }
+            }
           }}
           style={{
             padding: '12px 24px',
-            backgroundColor: isEraseMode ? '#ff8800' : '#888',
+            backgroundColor: '#888',
             color: 'white',
             fontSize: '1.2rem',
             fontWeight: 'bold',
@@ -237,17 +237,13 @@ export default function Home() {
             transition: 'background-color 0.2s'
           }}
           onMouseEnter={(e) => {
-            if (!isEraseMode) {
-              e.currentTarget.style.backgroundColor = '#999'
-            }
+            e.currentTarget.style.backgroundColor = '#999'
           }}
           onMouseLeave={(e) => {
-            if (!isEraseMode) {
-              e.currentTarget.style.backgroundColor = '#888'
-            }
+            e.currentTarget.style.backgroundColor = '#888'
           }}
         >
-          {isEraseMode ? 'Erase Mode ON' : 'Erase'}
+          Erase
         </button>
         <button
           onClick={async () => {
@@ -262,8 +258,7 @@ export default function Home() {
               if (!result.success) {
                 console.error('Failed to reset:', result.message)
               }
-              setSelectedNumber(null)
-              setIsEraseMode(false)
+              setSelectedCell(null)
             } catch (error) {
               console.error('Error resetting board:', error)
             }

@@ -175,4 +175,50 @@ async def reset_board():
 
 @app.post("/verify/{level_id}")
 async def verify(level_id: str, request: Request):
-    pass
+    global current_level_obj, original_level_obj
+    if current_level_obj is None:
+        return {"success": False, "message": "No level loaded"}
+    
+    if original_level_obj is None:
+        return {"success": False, "message": "No original level to compare against"}
+    
+    game_info = current_level_obj["game_info"]
+    board = game_info["board"]
+    original_board = original_level_obj["game_info"]["board"]
+    numbers_available = game_info.get("numbers_available", [])
+
+    # Verify that no number repeats in white squares in any row
+    for row_idx in range(len(board)):
+        white_squares_in_row = []
+        for col_idx in range(len(board[0])):
+            if original_board[row_idx][col_idx] == -1:
+                value = board[row_idx][col_idx]
+                if value != -1 and value in numbers_available:
+                    white_squares_in_row.append(value)
+
+        # Check for duplicates in white squares in this row
+        if len(white_squares_in_row) != len(set(white_squares_in_row)):
+            return {"success": False, "message": "Numbers repeat in white squares in row"}
+
+    # Verify that no number repeats in white squares in any column
+    for col_idx in range(len(board[0])):
+        white_squares_in_col = []
+        for row_idx in range(len(board)):
+            if original_board[row_idx][col_idx] == -1:
+                value = board[row_idx][col_idx]
+                if value != -1 and value in numbers_available:
+                    white_squares_in_col.append(value)
+                    
+        # Check for duplicates in white squares in this column
+        if len(white_squares_in_col) != len(set(white_squares_in_col)):
+            return {"success": False, "message": "Numbers repeat in white squares in column"}
+
+    #verify each black square's value equals the product of its orthogonally adjacent cells
+    for row in range(len(board)):
+        for col in range(len(board[0])):
+            if board[row][col] != -1:
+                continue
+            if board[row][col] != board[row-1][col] * board[row+1][col] * board[row][col-1] * board[row][col+1]:
+                return {"success": False, "message": "Value of black square does not equal the product of its orthogonally adjacent cells"}
+
+    return {"success": True, "message": "Level verified successfully"}

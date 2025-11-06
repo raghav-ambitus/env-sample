@@ -2,27 +2,38 @@
 
 import { useEffect, useState } from 'react'
 
-interface GameInfo {
-  board: number[][]
-  numbers_available: number[]
+type Cell = [number, number] // [x, y]
+
+interface PuzzleData {
+  grid_w: number
+  grid_h: number
+  dark_pieces: Cell[][]
+  lit_pieces?: Cell[][] // Optional - only shown in solution view
+  stars: Cell[]
 }
 
 interface LevelData {
-  game_info: GameInfo
+  puzzle: PuzzleData
   level_id: string
+  user_pieces: {cells: Cell[], label: string}[]
+  selected_cells: Cell[]
 }
 
 export default function Home() {
-  const [gameData, setGameData] = useState<GameInfo | null>(null)
-  const [selectedCell, setSelectedCell] = useState<{row: number, col: number} | null>(null)
+  const [puzzleData, setPuzzleData] = useState<PuzzleData | null>(null)
+  const [showSolution, setShowSolution] = useState(false)
+  const [userPieces, setUserPieces] = useState<{cells: Cell[], label: string}[]>([])
+  const [selectedCells, setSelectedCells] = useState<Cell[]>([])
 
   useEffect(() => {
     const eventSource = new EventSource('http://localhost:8000/events')
 
     eventSource.addEventListener('level', (event) => {
       const data: LevelData = JSON.parse(event.data)
-      if (data.game_info) {
-        setGameData(data.game_info)
+      if (data.puzzle) {
+        setPuzzleData(data.puzzle)
+        setUserPieces(data.user_pieces || [])
+        setSelectedCells(data.selected_cells || [])
       }
     })
 
@@ -35,14 +46,14 @@ export default function Home() {
     }
   }, [])
 
-  if (!gameData) {
+  if (!puzzleData) {
     return (
       <div style={{
         minHeight: '100vh',
         display: 'flex',
         justifyContent: 'center',
         alignItems: 'center',
-        backgroundColor: '#3a3a3a'
+        backgroundColor: '#2a2a3a'
       }}>
         <div style={{
           width: '60px',
@@ -62,6 +73,60 @@ export default function Home() {
     )
   }
 
+  // Create a grid representation
+  const { grid_w, grid_h, dark_pieces, lit_pieces, stars } = puzzleData
+  
+  // Initialize grid with empty cells
+  const grid: { type: 'empty' | 'dark' | 'lit' | 'star' | 'user_piece', label?: string }[][] = 
+    Array(grid_h).fill(null).map(() => Array(grid_w).fill(null).map(() => ({ type: 'empty' })))
+  
+  // Mark star positions
+  const starSet = new Set(stars.map(([x, y]) => `${x},${y}`))
+  
+  // Place dark pieces
+  dark_pieces.forEach((piece, idx) => {
+    const label = String.fromCharCode(97 + (idx % 26)) // a, b, c, ...
+    piece.forEach(([x, y]) => {
+      if (y >= 0 && y < grid_h && x >= 0 && x < grid_w) {
+        grid[y][x] = { type: 'dark', label }
+      }
+    })
+  })
+  
+  // Place user pieces (always show these)
+  userPieces.forEach((piece) => {
+    piece.cells.forEach(([x, y]) => {
+      if (y >= 0 && y < grid_h && x >= 0 && x < grid_w) {
+        const isStar = starSet.has(`${x},${y}`)
+        grid[y][x] = { type: 'user_piece', label: piece.label }
+      }
+    })
+  })
+  
+  // Place lit pieces if showing solution
+  if (showSolution && lit_pieces) {
+    lit_pieces.forEach((piece, idx) => {
+      const label = String.fromCharCode(65 + (idx % 26)) // A, B, C, ...
+      piece.forEach(([x, y]) => {
+        if (y >= 0 && y < grid_h && x >= 0 && x < grid_w) {
+          const isStar = starSet.has(`${x},${y}`)
+          grid[y][x] ={ type: 'lit', label }
+        }
+      })
+    })
+  } else {
+    // In puzzle mode, show stars in empty cells (not covered by user pieces)
+    stars.forEach(([x, y]) => {
+      if (y >= 0 && y < grid_h && x >= 0 && x < grid_w) {
+        if (grid[y][x].type === 'empty') {
+          grid[y][x] = { type: 'star' }
+        }
+      }
+    })
+  }
+
+  const cellSize = Math.min(80, Math.max(40, 480 / Math.max(grid_w, grid_h)))
+
   return (
     <main style={{
       minHeight: '100vh',
@@ -70,219 +135,157 @@ export default function Home() {
       justifyContent: 'center',
       alignItems: 'center',
       fontFamily: 'system-ui, -apple-system, sans-serif',
-      backgroundColor: '#3a3a3a',
+      backgroundColor: '#2a2a3a',
       padding: '2rem',
       gap: '2rem'
     }}>
+      <h1 style={{
+        fontSize: '3rem',
+        fontWeight: 'bold',
+        color: '#fff',
+        margin: 0,
+        textShadow: '2px 2px 4px rgba(0,0,0,0.5)'
+      }}>
+        Twinominoes
+      </h1>
+
       {/* Board */}
       <div style={{
         display: 'grid',
-        gridTemplateColumns: `repeat(${gameData.board[0]?.length || 5}, 1fr)`,
-        gap: '0',
-        border: '8px solid white',
-        borderRadius: '12px',
-        overflow: 'hidden',
-        backgroundColor: 'white',
-        padding: '8px'
+        gridTemplateColumns: `repeat(${grid_w}, ${cellSize}px)`,
+        gridTemplateRows: `repeat(${grid_h}, ${cellSize}px)`,
+        gap: '2px',
+        backgroundColor: '#555',
+        padding: '4px',
+        borderRadius: '8px',
+        boxShadow: '0 8px 32px rgba(0,0,0,0.4)'
       }}>
-        {gameData.board.map((row, rowIdx) => (
+        {grid.map((row, rowIdx) => (
           row.map((cell, colIdx) => {
-            const isWhite = cell === -1
-            const isPlaced = cell !== -1 && gameData.numbers_available.includes(cell)
-            const isSelected = selectedCell?.row === rowIdx && selectedCell?.col === colIdx
-            const canSelect = isWhite || isPlaced
+            // Check if this cell is selected
+            const isSelected = selectedCells.some(([x, y]) => x === colIdx && y === rowIdx)
+            
+            let bgColor = '#f5f5f5' // empty cell background
+            let textColor = '#333'
+            let content = ''
+            let borderColor = '#ddd'
+            
+            if (cell.type === 'dark') {
+              bgColor = '#4a4a4a'
+              textColor = '#aaa'
+              content = cell.label || ''
+            } else if (cell.type === 'user_piece') {
+              bgColor = '#9370db' // Purple for user pieces
+              textColor = '#fff'
+              content = cell.label || ''
+            } else if (cell.type === 'lit') {
+              bgColor = '#6eb5ff' // Blue for solution pieces
+              textColor = '#fff'
+              content = cell.label || ''
+            } else if (cell.type === 'star') {
+              bgColor = '#fff8dc'
+              textColor = '#ff6b35'
+              content = '★'
+            }
+            
+            // Selected cells get orange border
+            if (isSelected) {
+              borderColor = '#ffa500'
+            }
             
             return (
               <div
                 key={`${rowIdx}-${colIdx}`}
-                onClick={() => {
-                  // Select cell (for placing numbers or erasing)
-                  if (canSelect) {
-                    if (isSelected) {
-                      setSelectedCell(null)
-                    } else {
-                      setSelectedCell({row: rowIdx, col: colIdx})
-                    }
-                  }
-                }}
                 style={{
-                  width: '120px',
-                  height: '120px',
-                  backgroundColor: isWhite ? 'white' : 'black',
-                  color: isWhite ? 'black' : 'white',
+                  width: `${cellSize}px`,
+                  height: `${cellSize}px`,
+                  backgroundColor: bgColor,
+                  color: textColor,
                   display: 'flex',
                   justifyContent: 'center',
                   alignItems: 'center',
-                  fontSize: '3rem',
+                  fontSize: `${cellSize * 0.5}px`,
                   fontWeight: 'bold',
-                  border: isSelected ? '4px solid #ff8800' : '2px solid #aaa',
-                  cursor: canSelect ? 'pointer' : 'default',
-                  transition: 'opacity 0.2s, border 0.2s',
-                }}
-                onMouseEnter={(e) => {
-                  if (canSelect && !isSelected) {
-                    e.currentTarget.style.backgroundColor = isWhite ? '#f0f0f0' : '#333'
-                  }
-                }}
-                onMouseLeave={(e) => {
-                  if (canSelect && !isSelected) {
-                    e.currentTarget.style.backgroundColor = isWhite ? 'white' : 'black'
-                  }
+                  borderRadius: '2px',
+                  boxShadow: cell.type !== 'empty' ? 'inset 0 2px 4px rgba(0,0,0,0.1)' : 'none',
+                  border: isSelected ? `3px solid ${borderColor}` : '1px solid #ddd'
                 }}
               >
-                {cell !== -1 ? cell : ''}
+                {content}
               </div>
             )
           })
         ))}
       </div>
 
-      {/* Number buttons */}
+      {/* Game Info */}
       <div style={{
-        display: 'flex',
-        gap: '1rem'
+        backgroundColor: '#3a3a4a',
+        padding: '1.5rem',
+        borderRadius: '8px',
+        color: '#fff',
+        maxWidth: '600px',
+        boxShadow: '0 4px 16px rgba(0,0,0,0.3)'
       }}>
-        {gameData.numbers_available.map((num) => (
-          <button
-            key={num}
-            onClick={async () => {
-              if (selectedCell !== null) {
-                // Place number in selected cell
-                try {
-                  const response = await fetch('http://localhost:8000/place', {
-                    method: 'POST',
-                    headers: {
-                      'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({
-                      row: selectedCell.row,
-                      col: selectedCell.col,
-                      number: num
-                    })
-                  })
-                  const result = await response.json()
-                  if (!result.success) {
-                    console.error('Failed to place number:', result.message)
-                  } else {
-                    setSelectedCell(null)
-                  }
-                } catch (error) {
-                  console.error('Error placing number:', error)
-                }
-              }
-            }}
-            style={{
-              width: '80px',
-              height: '80px',
-              backgroundColor: '#555',
-              color: 'white',
-              fontSize: '2rem',
-              fontWeight: 'bold',
-              border: 'none',
-              borderRadius: '8px',
-              cursor: 'pointer',
-              transition: 'background-color 0.2s'
-            }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.backgroundColor = '#666'
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.backgroundColor = '#555'
-            }}
-          >
-            {num}
-          </button>
-        ))}
+        <h2 style={{ margin: '0 0 1rem 0', fontSize: '1.5rem' }}>Game Rules:</h2>
+        <ul style={{ margin: 0, paddingLeft: '1.5rem', lineHeight: '1.8' }}>
+          <li><strong>Dark pieces</strong> (gray, lowercase) are constraints</li>
+          <li><strong>Purple pieces</strong> are user placements (via CLI)</li>
+          <li>Goal: Cover all ★ stars with pieces</li>
+          <li>Pieces must touch dark pieces by edges</li>
+          <li>Pieces must NOT touch each other by edges (corners OK)</li>
+          <li>All pieces must be corner-connected</li>
+        </ul>
+        <div style={{ marginTop: '1rem', fontSize: '0.9rem', color: '#bbb' }}>
+          Control this game via CLI commands to the backend API
+        </div>
       </div>
 
-      {/* Action buttons */}
+      {/* Action button */}
       <div style={{
         display: 'flex',
-        gap: '1rem'
+        gap: '1rem',
+        flexWrap: 'wrap',
+        justifyContent: 'center'
       }}>
         <button
-          onClick={async () => {
-            if (selectedCell !== null) {
-              try {
-                const response = await fetch('http://localhost:8000/erase', {
-                  method: 'POST',
-                  headers: {
-                    'Content-Type': 'application/json',
-                  },
-                  body: JSON.stringify({
-                    row: selectedCell.row,
-                    col: selectedCell.col
-                  })
-                })
-                const result = await response.json()
-                if (!result.success) {
-                  console.error('Failed to erase:', result.message)
-                } else {
-                  setSelectedCell(null)
-                }
-              } catch (error) {
-                console.error('Error erasing cell:', error)
-              }
-            }
-          }}
+          onClick={() => setShowSolution(!showSolution)}
           style={{
-            padding: '12px 24px',
-            backgroundColor: '#888',
+            padding: '12px 32px',
+            backgroundColor: showSolution ? '#4CAF50' : '#2196F3',
             color: 'white',
             fontSize: '1.2rem',
             fontWeight: 'bold',
             border: 'none',
             borderRadius: '8px',
             cursor: 'pointer',
-            transition: 'background-color 0.2s'
+            transition: 'all 0.2s',
+            boxShadow: '0 4px 8px rgba(0,0,0,0.2)'
           }}
           onMouseEnter={(e) => {
-            e.currentTarget.style.backgroundColor = '#999'
+            e.currentTarget.style.transform = 'translateY(-2px)'
+            e.currentTarget.style.boxShadow = '0 6px 12px rgba(0,0,0,0.3)'
           }}
           onMouseLeave={(e) => {
-            e.currentTarget.style.backgroundColor = '#888'
+            e.currentTarget.style.transform = 'translateY(0)'
+            e.currentTarget.style.boxShadow = '0 4px 8px rgba(0,0,0,0.2)'
           }}
         >
-          Erase
+          {showSolution ? 'Hide Solution' : 'Show Solution'}
         </button>
-        <button
-          onClick={async () => {
-            try {
-              const response = await fetch('http://localhost:8000/reset', {
-                method: 'POST',
-                headers: {
-                  'Content-Type': 'application/json',
-                }
-              })
-              const result = await response.json()
-              if (!result.success) {
-                console.error('Failed to reset:', result.message)
-              }
-              setSelectedCell(null)
-            } catch (error) {
-              console.error('Error resetting board:', error)
-            }
-          }}
-          style={{
-            padding: '12px 24px',
-            backgroundColor: '#ff4444',
-            color: 'white',
-            fontSize: '1.2rem',
-            fontWeight: 'bold',
-            border: 'none',
-            borderRadius: '8px',
-            cursor: 'pointer',
-            transition: 'background-color 0.2s'
-          }}
-          onMouseEnter={(e) => {
-            e.currentTarget.style.backgroundColor = '#ff6666'
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.backgroundColor = '#ff4444'
-          }}
-        >
-          Reset
-        </button>
+      </div>
+
+      {/* Puzzle Stats */}
+      <div style={{
+        display: 'flex',
+        gap: '2rem',
+        color: '#aaa',
+        fontSize: '0.9rem'
+      }}>
+        <div>Grid: {grid_w} × {grid_h}</div>
+        <div>Dark pieces: {dark_pieces.length}</div>
+        <div>Stars: {stars.length}</div>
+        <div>Your pieces: {userPieces.length}</div>
       </div>
     </main>
   )

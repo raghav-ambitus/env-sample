@@ -131,6 +131,7 @@ def place_solution(grid_w, grid_h, num_pieces, shape_pool, max_attempts=1000):
 def place_darks_for_solution(lit_pieces, grid_w, grid_h):
     darks = []
     occupied = set().union(*lit_pieces)
+    dark_cells = set()  # Track all dark piece cells separately
     for lit in lit_pieces:
         # Dark piece should have THE SAME SHAPE as the lit piece (not just size)
         # Normalize the lit piece shape
@@ -169,7 +170,24 @@ def place_darks_for_solution(lit_pieces, grid_w, grid_h):
                                 if nbr not in cand: continue
                                 s = set(cand)
                                 if s & occupied: continue
-                                darks.append(cand); occupied |= s; placed = True; break
+                                # Check if this dark piece would be orthogonally adjacent to any existing dark piece
+                                # Dark pieces can only touch corner-to-corner, not edge-to-edge
+                                orth_adjacent_to_dark = False
+                                for cand_cell in s:
+                                    for orth_nbr in orthogonal_neighbors(cand_cell):
+                                        if orth_nbr in dark_cells:
+                                            orth_adjacent_to_dark = True
+                                            break
+                                    if orth_adjacent_to_dark:
+                                        break
+                                if orth_adjacent_to_dark:
+                                    continue
+                                # Valid placement - no orthogonal adjacency to other dark pieces
+                                darks.append(cand)
+                                occupied |= s
+                                dark_cells |= s
+                                placed = True
+                                break
                             if placed: break
                         if placed: break
                     if placed: break

@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 
 type Cell = [number, number] // [x, y]
 
@@ -17,6 +17,82 @@ interface LevelData {
   level_id: string
   user_pieces: {cells: Cell[], label: string}[]
   selected_cells: Cell[]
+}
+
+// Color palette for pieces - maps labels to colors
+const COLOR_PALETTE = [
+  '#FFE066', // Light yellow
+  '#FFA07A', // Light orange/salmon
+  '#87CEEB', // Sky blue
+  '#98D8C8', // Mint green
+  '#F0A3FF', // Light purple
+  '#FFB6C1', // Light pink
+  '#FFD700', // Gold
+  '#90EE90', // Light green
+  '#FFE4B5', // Moccasin
+  '#DDA0DD', // Plum
+  '#B0E0E6', // Powder blue
+  '#F5DEB3', // Wheat
+  '#FFE4E1', // Misty rose
+  '#E0E0E0', // Light gray
+  '#FFCCCB', // Light red
+  '#B19CD9', // Light purple-blue
+]
+
+// Color mapping function - creates a consistent mapping from labels to colors
+function createColorMap(labels: string[]): Map<string, string> {
+  const map = new Map<string, string>()
+  const uniqueLabels = Array.from(new Set(labels)).sort()
+  
+  uniqueLabels.forEach((label, index) => {
+    map.set(label, COLOR_PALETTE[index % COLOR_PALETTE.length])
+  })
+  
+  return map
+}
+
+// Normalize a shape to its canonical form
+function normalizeShape(cells: Cell[]): Cell[] {
+  if (cells.length === 0) return []
+  const xs = cells.map(([x]) => x)
+  const ys = cells.map(([, y]) => y)
+  const minX = Math.min(...xs)
+  const minY = Math.min(...ys)
+  return cells.map(([x, y]) => [x - minX, y - minY] as Cell).sort((a, b) => {
+    if (a[1] !== b[1]) return a[1] - b[1]
+    return a[0] - b[0]
+  })
+}
+
+// Check if two shapes match (considering rotations and reflections)
+function shapesMatch(cells1: Cell[], cells2: Cell[]): boolean {
+  if (cells1.length !== cells2.length) return false
+  
+  const norm1 = normalizeShape(cells1)
+  
+  // Try all rotations and reflections
+  for (const flipX of [false, true]) {
+    for (const flipY of [false, true]) {
+      for (let rot = 0; rot < 4; rot++) {
+        const transformed: Cell[] = cells2.map(([x, y]) => {
+          let nx = flipX ? -x : x
+          let ny = flipY ? -y : y
+          // Rotate
+          for (let r = 0; r < rot; r++) {
+            const temp = nx
+            nx = -ny
+            ny = temp
+          }
+          return [nx, ny] as Cell
+        })
+        
+        if (JSON.stringify(normalizeShape(transformed)) === JSON.stringify(norm1)) {
+          return true
+        }
+      }
+    }
+  }
+  return false
 }
 
 export default function Home() {
@@ -45,6 +121,84 @@ export default function Home() {
       eventSource.close()
     }
   }, [])
+
+  // All hooks must be called before any conditional returns
+  // Create a master color map for all possible labels (A, B, C, etc.)
+  // This ensures dark pieces and user pieces with the same label get the same color
+  const masterColorMap = useMemo(() => {
+    if (!puzzleData) return new Map<string, string>()
+    // Create labels for all dark pieces (A, B, C, etc.)
+    const labels = puzzleData.dark_pieces.map((_, idx) => String.fromCharCode(65 + idx))
+    return createColorMap(labels)
+  }, [puzzleData?.dark_pieces])
+
+  // Create color maps
+  const userPieceColorMap = useMemo(() => {
+    // Use the master color map to ensure consistency with dark pieces
+    return masterColorMap
+  }, [masterColorMap])
+  
+  const litPieceColorMap = useMemo(() => {
+    if (!puzzleData || !showSolution || !puzzleData.lit_pieces) return new Map<string, string>()
+    const labels = puzzleData.lit_pieces.map((_, idx) => String.fromCharCode(65 + (idx % 26)))
+    return createColorMap(labels)
+  }, [puzzleData?.lit_pieces, showSolution])
+
+  // Create color map for dark pieces based on their index (A, B, C, etc.)
+  // This is independent of user pieces - each dark piece always has a color
+  const darkPieceColorMap = useMemo(() => {
+    if (!puzzleData) return new Map<number, string>()
+    const map = new Map<number, string>()
+    puzzleData.dark_pieces.forEach((_, darkIdx) => {
+      const label = String.fromCharCode(65 + darkIdx) // A, B, C, etc.
+      // Use the master color map to get the color for this label
+      map.set(darkIdx, masterColorMap.get(label) || COLOR_PALETTE[darkIdx % COLOR_PALETTE.length])
+    })
+    return map
+  }, [puzzleData?.dark_pieces, masterColorMap])
+
+  // Determine which dark pieces have matching user pieces placed
+  const darkPieceComplete = useMemo(() => {
+    if (!puzzleData) return new Map<number, boolean>()
+    const complete = new Map<number, boolean>()
+    puzzleData.dark_pieces.forEach((darkPiece, darkIdx) => {
+      // Expected label for this dark piece (A=0, B=1, etc.)
+      const expectedLabel = String.fromCharCode(65 + darkIdx)
+      
+      // Find user piece with this label
+      const matchingUserPiece = userPieces.find(p => p.label === expectedLabel)
+      
+      if (matchingUserPiece) {
+        // Check if shapes match
+        const userCells = matchingUserPiece.cells.map(([x, y]) => [x, y] as Cell)
+        const darkCells = darkPiece.map(([x, y]) => [x, y] as Cell)
+        complete.set(darkIdx, shapesMatch(userCells, darkCells))
+      } else {
+        complete.set(darkIdx, false)
+      }
+    })
+    return complete
+  }, [puzzleData?.dark_pieces, userPieces])
+  
+  // Determine which cell in each dark piece should show the circle (first cell)
+  // Always show the circle, even when no user pieces are placed
+  const darkPieceIndicatorCells = useMemo(() => {
+    if (!puzzleData) return new Map<string, { filled: boolean; color: string }>()
+    const indicators = new Map<string, { filled: boolean; color: string }>()
+    puzzleData.dark_pieces.forEach((darkPiece, darkIdx) => {
+      if (darkPiece.length > 0) {
+        const [x, y] = darkPiece[0] // First cell of the dark piece
+        const key = `${x},${y}`
+        // Get the color assigned to this dark piece
+        const color = darkPieceColorMap.get(darkIdx) || COLOR_PALETTE[darkIdx % COLOR_PALETTE.length]
+        indicators.set(key, { 
+          filled: darkPieceComplete.get(darkIdx) || false,
+          color: color
+        })
+      }
+    })
+    return indicators
+  }, [puzzleData?.dark_pieces, darkPieceComplete, darkPieceColorMap])
 
   if (!puzzleData) {
     return (
@@ -83,12 +237,11 @@ export default function Home() {
   // Mark star positions
   const starSet = new Set(stars.map(([x, y]) => `${x},${y}`))
   
-  // Place dark pieces
-  dark_pieces.forEach((piece, idx) => {
-    const label = String.fromCharCode(97 + (idx % 26)) // a, b, c, ...
+  // Place dark pieces (no labels needed, just mark as dark)
+  dark_pieces.forEach((piece) => {
     piece.forEach(([x, y]) => {
       if (y >= 0 && y < grid_h && x >= 0 && x < grid_w) {
-        grid[y][x] = { type: 'dark', label }
+        grid[y][x] = { type: 'dark' }
       }
     })
   })
@@ -97,7 +250,6 @@ export default function Home() {
   userPieces.forEach((piece) => {
     piece.cells.forEach(([x, y]) => {
       if (y >= 0 && y < grid_h && x >= 0 && x < grid_w) {
-        const isStar = starSet.has(`${x},${y}`)
         grid[y][x] = { type: 'user_piece', label: piece.label }
       }
     })
@@ -109,8 +261,10 @@ export default function Home() {
       const label = String.fromCharCode(65 + (idx % 26)) // A, B, C, ...
       piece.forEach(([x, y]) => {
         if (y >= 0 && y < grid_h && x >= 0 && x < grid_w) {
-          const isStar = starSet.has(`${x},${y}`)
-          grid[y][x] ={ type: 'lit', label }
+          // Only place if not already covered by user piece
+          if (grid[y][x].type !== 'user_piece') {
+            grid[y][x] = { type: 'lit', label }
+          }
         }
       })
     })
@@ -139,16 +293,6 @@ export default function Home() {
       padding: '2rem',
       gap: '2rem'
     }}>
-      <h1 style={{
-        fontSize: '3rem',
-        fontWeight: 'bold',
-        color: '#fff',
-        margin: 0,
-        textShadow: '2px 2px 4px rgba(0,0,0,0.5)'
-      }}>
-        Twinominoes
-      </h1>
-
       {/* Board */}
       <div style={{
         display: 'grid',
@@ -164,28 +308,36 @@ export default function Home() {
           row.map((cell, colIdx) => {
             // Check if this cell is selected
             const isSelected = selectedCells.some(([x, y]) => x === colIdx && y === rowIdx)
+            const isStar = starSet.has(`${colIdx},${rowIdx}`)
             
-            let bgColor = '#f5f5f5' // empty cell background
-            let textColor = '#333'
-            let content = ''
-            let borderColor = '#ddd'
+            let bgColor = '#e0e0e0' // empty cell background (light grey)
+            let borderColor = '#ccc'
+            let showStar = false
+            
+            // Check if this dark cell should show a circle indicator
+            const darkIndicatorKey = `${colIdx},${rowIdx}`
+            const darkIndicator = darkPieceIndicatorCells.get(darkIndicatorKey)
             
             if (cell.type === 'dark') {
-              bgColor = '#4a4a4a'
-              textColor = '#aaa'
-              content = cell.label || ''
+              bgColor = '#1a1a1a' // Very dark/black for dark pieces
+              borderColor = '#333'
             } else if (cell.type === 'user_piece') {
-              bgColor = '#9370db' // Purple for user pieces
-              textColor = '#fff'
-              content = cell.label || ''
+              // Use color from map, default to light yellow
+              bgColor = cell.label ? (userPieceColorMap.get(cell.label) || '#FFE066') : '#FFE066'
+              borderColor = '#d4a017'
             } else if (cell.type === 'lit') {
-              bgColor = '#6eb5ff' // Blue for solution pieces
-              textColor = '#fff'
-              content = cell.label || ''
+              // Use color from map, default to light orange
+              bgColor = cell.label ? (litPieceColorMap.get(cell.label) || '#FFA07A') : '#FFA07A'
+              borderColor = '#ff7f50'
             } else if (cell.type === 'star') {
-              bgColor = '#fff8dc'
-              textColor = '#ff6b35'
-              content = '★'
+              bgColor = '#e0e0e0' // Use empty cell background
+              borderColor = '#ccc'
+              showStar = true
+            }
+            
+            // Show star if this cell has a star (even if covered by a piece)
+            if (isStar && cell.type !== 'empty' && cell.type !== 'star') {
+              showStar = true
             }
             
             // Selected cells get orange border
@@ -200,92 +352,43 @@ export default function Home() {
                   width: `${cellSize}px`,
                   height: `${cellSize}px`,
                   backgroundColor: bgColor,
-                  color: textColor,
                   display: 'flex',
                   justifyContent: 'center',
                   alignItems: 'center',
-                  fontSize: `${cellSize * 0.5}px`,
-                  fontWeight: 'bold',
                   borderRadius: '2px',
                   boxShadow: cell.type !== 'empty' ? 'inset 0 2px 4px rgba(0,0,0,0.1)' : 'none',
-                  border: isSelected ? `3px solid ${borderColor}` : '1px solid #ddd'
+                  border: isSelected ? `3px solid ${borderColor}` : `2px solid ${borderColor}`,
+                  position: 'relative'
                 }}
               >
-                {content}
+                {showStar && (
+                  <span style={{
+                    fontSize: `${cellSize * 0.6}px`,
+                    color: '#1a1a1a',
+                    fontWeight: 'bold',
+                    textShadow: '0 0 2px rgba(255,255,255,0.8)'
+                  }}>
+                    ★
+                  </span>
+                )}
+                {darkIndicator && (
+                  <div style={{
+                    position: 'absolute',
+                    width: `${cellSize * 0.3}px`,
+                    height: `${cellSize * 0.3}px`,
+                    borderRadius: '50%',
+                    border: `2px solid ${darkIndicator.color}`,
+                    backgroundColor: darkIndicator.filled ? darkIndicator.color : 'transparent', // Transparent when hollow (shows black background)
+                    top: '50%',
+                    left: '50%',
+                    transform: 'translate(-50%, -50%)',
+                    boxShadow: '0 0 2px rgba(0,0,0,0.5)'
+                  }} />
+                )}
               </div>
             )
           })
         ))}
-      </div>
-
-      {/* Game Info */}
-      <div style={{
-        backgroundColor: '#3a3a4a',
-        padding: '1.5rem',
-        borderRadius: '8px',
-        color: '#fff',
-        maxWidth: '600px',
-        boxShadow: '0 4px 16px rgba(0,0,0,0.3)'
-      }}>
-        <h2 style={{ margin: '0 0 1rem 0', fontSize: '1.5rem' }}>Game Rules:</h2>
-        <ul style={{ margin: 0, paddingLeft: '1.5rem', lineHeight: '1.8' }}>
-          <li><strong>Dark pieces</strong> (gray, lowercase) are constraints</li>
-          <li><strong>Purple pieces</strong> are user placements (via CLI)</li>
-          <li>Goal: Cover all ★ stars with pieces</li>
-          <li>Pieces must touch dark pieces by edges</li>
-          <li>Pieces must NOT touch each other by edges (corners OK)</li>
-          <li>All pieces must be corner-connected</li>
-        </ul>
-        <div style={{ marginTop: '1rem', fontSize: '0.9rem', color: '#bbb' }}>
-          Control this game via CLI commands to the backend API
-        </div>
-      </div>
-
-      {/* Action button */}
-      <div style={{
-        display: 'flex',
-        gap: '1rem',
-        flexWrap: 'wrap',
-        justifyContent: 'center'
-      }}>
-        <button
-          onClick={() => setShowSolution(!showSolution)}
-          style={{
-            padding: '12px 32px',
-            backgroundColor: showSolution ? '#4CAF50' : '#2196F3',
-            color: 'white',
-            fontSize: '1.2rem',
-            fontWeight: 'bold',
-            border: 'none',
-            borderRadius: '8px',
-            cursor: 'pointer',
-            transition: 'all 0.2s',
-            boxShadow: '0 4px 8px rgba(0,0,0,0.2)'
-          }}
-          onMouseEnter={(e) => {
-            e.currentTarget.style.transform = 'translateY(-2px)'
-            e.currentTarget.style.boxShadow = '0 6px 12px rgba(0,0,0,0.3)'
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.transform = 'translateY(0)'
-            e.currentTarget.style.boxShadow = '0 4px 8px rgba(0,0,0,0.2)'
-          }}
-        >
-          {showSolution ? 'Hide Solution' : 'Show Solution'}
-        </button>
-      </div>
-
-      {/* Puzzle Stats */}
-      <div style={{
-        display: 'flex',
-        gap: '2rem',
-        color: '#aaa',
-        fontSize: '0.9rem'
-      }}>
-        <div>Grid: {grid_w} × {grid_h}</div>
-        <div>Dark pieces: {dark_pieces.length}</div>
-        <div>Stars: {stars.length}</div>
-        <div>Your pieces: {userPieces.length}</div>
       </div>
     </main>
   )

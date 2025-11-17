@@ -19,7 +19,6 @@ app.add_middleware(
 
 current_level_obj = None
 original_level_obj = None
-selected_list = []
 pentonimo_letters = ["F", "I", "L", "P", "N", "T", "U", "V", "W", "X", "Y", "Z"]
 _subscribers: set[asyncio.Queue[tuple[str, dict]]] = set()
 
@@ -149,17 +148,20 @@ _PENTOMINO_BASE_SHAPES = {
     "N": [(0, 0), (1, 0), (1, 1), (2, 1), (3, 1)],
     "P": [(0, 0), (0, 1), (1, 0), (1, 1), (2, 0)],
     "T": [(0, 0), (1, 0), (2, 0), (1, 1), (1, 2)],
-    "U": [(0, 0), (0, 1), (1, 0), (1, 1), (2, 1)],
+    "U": [(0, 0), (0, 1), (1, 1), (2, 0), (2, 1)],
     "V": [(0, 0), (0, 1), (0, 2), (1, 2), (2, 2)],
     "W": [(0, 0), (0, 1), (1, 1), (1, 2), (2, 2)],
     "X": [(1, 0), (0, 1), (1, 1), (2, 1), (1, 2)],
     "Y": [(0, 0), (1, 0), (2, 0), (3, 0), (2, 1)],
-    "Z": [(0, 0), (1, 0), (1, 1), (2, 1), (2, 2)],
+    "Z": [(0, 0), (0, 1), (1, 1), (2, 1), (2, 2)],
 }
 
-_CANONICAL_TO_LETTER: dict[tuple[tuple[int, int], ...], str] = {
-    _canonical(shape): letter for letter, shape in _PENTOMINO_BASE_SHAPES.items()
-}
+# Build dictionary mapping all transformations of each pentomino to its letter
+_CANONICAL_TO_LETTER: dict[tuple[tuple[int, int], ...], str] = {}
+for letter, shape in _PENTOMINO_BASE_SHAPES.items():
+    # Add all transformations of this shape to the dictionary
+    for transform in _transformations(shape):
+        _CANONICAL_TO_LETTER[transform] = letter
 
 @app.get("/events")
 async def sse_stream() -> StreamingResponse:
@@ -224,26 +226,24 @@ async def select_tile(request: Request):
     if row < 0 or row >= len(board) or col < 0 or col >= len(board[0]):
         return {"success": False, "message": "Invalid position"}
 
-    global selected_list
     current_value = board[row][col]
 
     # Selecting an empty tile
     if current_value == EMPTY_TILE:
-        if len(selected_list) >= 5:
+        # Count currently selected tiles on the board
+        selected_count = sum(1 for row_data in board for cell in row_data if cell == SELECTED_TILE)
+        if selected_count >= 5:
             return {
                 "success": False,
                 "message": "Cannot select more than 5 tiles at once",
             }
         board[row][col] = SELECTED_TILE
-        if (row, col) not in selected_list:
-            selected_list.append((row, col))
         _publish("level", current_level_obj)
         return {"success": True, "message": "Tile selected"}
 
     # Unselecting an already selected tile
     if current_value == SELECTED_TILE:
         board[row][col] = EMPTY_TILE
-        selected_list = [coord for coord in selected_list if coord != (row, col)]
         _publish("level", current_level_obj)
         return {"success": True, "message": "Tile unselected"}
 
@@ -260,27 +260,44 @@ async def select_tile(request: Request):
 
 @app.post("/lock")
 async def lock_pentomino():
-    global current_level_obj, selected_list
+    global current_level_obj
     if current_level_obj is None:
         return {"success": False, "message": "No level loaded"}
 
     game_info = current_level_obj["game_info"]
     board = game_info["board"]
 
-    if not _is_selection_valid(board, selected_list):
+    # Build selection from board state
+    current_selection = []
+    for row_idx, row in enumerate(board):
+        for col_idx, cell in enumerate(row):
+            if cell == SELECTED_TILE:
+                # Ensure coordinates are integers
+                current_selection.append((int(row_idx), int(col_idx)))
+
+    if not _is_selection_valid(board, current_selection):
         return {
             "success": False,
             "message": "Exactly 5 connected tiles must be selected to lock",
         }
 
-    letter = _CANONICAL_TO_LETTER.get(_canonical(selected_list))
+    canonical_form = _canonical(current_selection)
+    letter = _CANONICAL_TO_LETTER.get(canonical_form)
     if letter is None:
+        # Debug: log what we got
+        print(f"DEBUG: Selection: {current_selection}")
+        print(f"DEBUG: Canonical: {canonical_form}")
+        print(f"DEBUG: In dict: {canonical_form in _CANONICAL_TO_LETTER}")
+        print(f"DEBUG: Dict size: {len(_CANONICAL_TO_LETTER)}")
+        # Check if it's a type issue
+        if isinstance(canonical_form, tuple):
+            print(f"DEBUG: Canonical is tuple, checking if any similar keys exist...")
+            for key in list(_CANONICAL_TO_LETTER.keys())[:3]:
+                print(f"DEBUG: Sample key: {key}, type: {type(key)}")
         return {"success": False, "message": "Selected tiles do not form a valid pentomino"}
 
-    for row, col in selected_list:
+    for row, col in current_selection:
         board[row][col] = letter
-
-    selected_list.clear()
 
     _publish("level", current_level_obj)
     return {"success": True, "message": f"Locked pentomino {letter}"}

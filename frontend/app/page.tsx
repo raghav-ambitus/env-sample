@@ -3,8 +3,7 @@
 import { useEffect, useState } from 'react'
 
 interface GameInfo {
-  board: number[][]
-  numbers_available: number[]
+  board: string[][]
 }
 
 interface LevelData {
@@ -12,9 +11,24 @@ interface LevelData {
   level_id: string
 }
 
+// Color mapping for pentomino letters (at 50% opacity)
+const PENTOMINO_COLORS: Record<string, string> = {
+  'F': 'rgba(255, 0, 0, 0.5)',      // Red
+  'I': 'rgba(0, 255, 0, 0.5)',      // Green
+  'L': 'rgba(0, 0, 255, 0.5)',      // Blue
+  'P': 'rgba(255, 255, 0, 0.5)',   // Yellow
+  'N': 'rgba(255, 0, 255, 0.5)',   // Magenta
+  'T': 'rgba(0, 255, 255, 0.5)',   // Cyan
+  'U': 'rgba(255, 165, 0, 0.5)',  // Orange
+  'V': 'rgba(128, 0, 128, 0.5)',  // Purple
+  'W': 'rgba(255, 192, 203, 0.5)', // Pink
+  'X': 'rgba(165, 42, 42, 0.5)',  // Brown
+  'Y': 'rgba(0, 128, 128, 0.5)',  // Teal
+  'Z': 'rgba(255, 20, 147, 0.5)', // Deep Pink
+}
+
 export default function Home() {
   const [gameData, setGameData] = useState<GameInfo | null>(null)
-  const [selectedCell, setSelectedCell] = useState<{row: number, col: number} | null>(null)
 
   useEffect(() => {
     const eventSource = new EventSource('http://localhost:8000/events')
@@ -34,6 +48,78 @@ export default function Home() {
       eventSource.close()
     }
   }, [])
+
+  const handleCellClick = async (row: number, col: number) => {
+    if (!gameData) return
+
+    const cellValue = gameData.board[row][col]
+
+    // If cell is empty ("-") or selected ("*"), call /select
+    if (cellValue === '-' || cellValue === '*') {
+      try {
+        const response = await fetch('http://localhost:8000/select', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            row,
+            col,
+          })
+        })
+        const result = await response.json()
+        if (!result.success) {
+          console.error('Failed to select/unselect tile:', result.message)
+        }
+      } catch (error) {
+        console.error('Error selecting tile:', error)
+      }
+    }
+    // If cell is a locked pentomino (letter), call /unlock
+    else if (cellValue in PENTOMINO_COLORS) {
+      try {
+        const response = await fetch('http://localhost:8000/unlock', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            row,
+            col,
+          })
+        })
+        const result = await response.json()
+        if (!result.success) {
+          console.error('Failed to unlock pentomino:', result.message)
+        }
+      } catch (error) {
+        console.error('Error unlocking pentomino:', error)
+      }
+    }
+  }
+
+  const handleLock = async () => {
+    try {
+      const response = await fetch('http://localhost:8000/lock', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({})
+      })
+      const result = await response.json()
+      if (!result.success) {
+        console.error('Failed to lock:', result.message)
+      }
+    } catch (error) {
+      console.error('Error locking pentomino:', error)
+    }
+  }
+
+  const hasSelectedTiles = () => {
+    if (!gameData) return false
+    return gameData.board.some(row => row.some(cell => cell === '*'))
+  }
 
   if (!gameData) {
     return (
@@ -87,111 +173,51 @@ export default function Home() {
       }}>
         {gameData.board.map((row, rowIdx) => (
           row.map((cell, colIdx) => {
-            const isWhite = cell === -1
-            const isPlaced = cell !== -1 && gameData.numbers_available.includes(cell)
-            const isSelected = selectedCell?.row === rowIdx && selectedCell?.col === colIdx
-            const canSelect = isWhite || isPlaced
+            const isEmpty = cell === '-'
+            const isSelected = cell === '*'
+            const isLocked = cell in PENTOMINO_COLORS
+            
+            // Determine background color
+            let backgroundColor = 'white' // default for empty
+            if (isSelected) {
+              backgroundColor = '#808080' // grey for selected
+            } else if (isLocked) {
+              backgroundColor = PENTOMINO_COLORS[cell] || 'white'
+            }
             
             return (
               <div
                 key={`${rowIdx}-${colIdx}`}
-                onClick={() => {
-                  // Select cell (for placing numbers or erasing)
-                  if (canSelect) {
-                    if (isSelected) {
-                      setSelectedCell(null)
-                    } else {
-                      setSelectedCell({row: rowIdx, col: colIdx})
-                    }
-                  }
-                }}
+                onClick={() => handleCellClick(rowIdx, colIdx)}
                 style={{
                   width: '120px',
                   height: '120px',
-                  backgroundColor: isWhite ? 'white' : 'black',
-                  color: isWhite ? 'black' : 'white',
+                  backgroundColor,
+                  color: isLocked ? '#000' : '#000',
                   display: 'flex',
                   justifyContent: 'center',
                   alignItems: 'center',
-                  fontSize: '3rem',
+                  fontSize: '2rem',
                   fontWeight: 'bold',
-                  border: isSelected ? '4px solid #ff8800' : '2px solid #aaa',
-                  cursor: canSelect ? 'pointer' : 'default',
+                  border: '2px solid #aaa',
+                  cursor: 'pointer',
                   transition: 'opacity 0.2s, border 0.2s',
                 }}
                 onMouseEnter={(e) => {
-                  if (canSelect && !isSelected) {
-                    e.currentTarget.style.backgroundColor = isWhite ? '#f0f0f0' : '#333'
+                  if (isEmpty || isSelected) {
+                    e.currentTarget.style.backgroundColor = isSelected ? '#999' : '#f0f0f0'
                   }
                 }}
                 onMouseLeave={(e) => {
-                  if (canSelect && !isSelected) {
-                    e.currentTarget.style.backgroundColor = isWhite ? 'white' : 'black'
+                  if (isEmpty || isSelected) {
+                    e.currentTarget.style.backgroundColor = isSelected ? '#808080' : 'white'
                   }
                 }}
               >
-                {cell !== -1 ? cell : ''}
+                {isLocked ? cell : ''}
               </div>
             )
           })
-        ))}
-      </div>
-
-      {/* Number buttons */}
-      <div style={{
-        display: 'flex',
-        gap: '1rem'
-      }}>
-        {gameData.numbers_available.map((num) => (
-          <button
-            key={num}
-            onClick={async () => {
-              if (selectedCell !== null) {
-                // Place number in selected cell
-                try {
-                  const response = await fetch('http://localhost:8000/place', {
-                    method: 'POST',
-                    headers: {
-                      'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({
-                      row: selectedCell.row,
-                      col: selectedCell.col,
-                      number: num
-                    })
-                  })
-                  const result = await response.json()
-                  if (!result.success) {
-                    console.error('Failed to place number:', result.message)
-                  } else {
-                    setSelectedCell(null)
-                  }
-                } catch (error) {
-                  console.error('Error placing number:', error)
-                }
-              }
-            }}
-            style={{
-              width: '80px',
-              height: '80px',
-              backgroundColor: '#555',
-              color: 'white',
-              fontSize: '2rem',
-              fontWeight: 'bold',
-              border: 'none',
-              borderRadius: '8px',
-              cursor: 'pointer',
-              transition: 'background-color 0.2s'
-            }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.backgroundColor = '#666'
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.backgroundColor = '#555'
-            }}
-          >
-            {num}
-          </button>
         ))}
       </div>
 
@@ -201,49 +227,32 @@ export default function Home() {
         gap: '1rem'
       }}>
         <button
-          onClick={async () => {
-            if (selectedCell !== null) {
-              try {
-                const response = await fetch('http://localhost:8000/erase', {
-                  method: 'POST',
-                  headers: {
-                    'Content-Type': 'application/json',
-                  },
-                  body: JSON.stringify({
-                    row: selectedCell.row,
-                    col: selectedCell.col
-                  })
-                })
-                const result = await response.json()
-                if (!result.success) {
-                  console.error('Failed to erase:', result.message)
-                } else {
-                  setSelectedCell(null)
-                }
-              } catch (error) {
-                console.error('Error erasing cell:', error)
-              }
-            }
-          }}
+          onClick={handleLock}
+          disabled={!hasSelectedTiles()}
           style={{
             padding: '12px 24px',
-            backgroundColor: '#888',
+            backgroundColor: hasSelectedTiles() ? '#D4AF37' : '#B8860B',
             color: 'white',
             fontSize: '1.2rem',
             fontWeight: 'bold',
             border: 'none',
             borderRadius: '8px',
-            cursor: 'pointer',
-            transition: 'background-color 0.2s'
+            cursor: hasSelectedTiles() ? 'pointer' : 'not-allowed',
+            transition: 'background-color 0.2s',
+            opacity: hasSelectedTiles() ? 1 : 0.6
           }}
           onMouseEnter={(e) => {
-            e.currentTarget.style.backgroundColor = '#999'
+            if (hasSelectedTiles()) {
+              e.currentTarget.style.backgroundColor = '#F4D03F'
+            }
           }}
           onMouseLeave={(e) => {
-            e.currentTarget.style.backgroundColor = '#888'
+            if (hasSelectedTiles()) {
+              e.currentTarget.style.backgroundColor = '#D4AF37'
+            }
           }}
         >
-          Erase
+          Lock
         </button>
         <button
           onClick={async () => {
@@ -258,7 +267,6 @@ export default function Home() {
               if (!result.success) {
                 console.error('Failed to reset:', result.message)
               }
-              setSelectedCell(null)
             } catch (error) {
               console.error('Error resetting board:', error)
             }
@@ -287,5 +295,3 @@ export default function Home() {
     </main>
   )
 }
-
-

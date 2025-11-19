@@ -54,6 +54,10 @@ export default function Home() {
 
     const cellValue = gameData.board[row][col]
 
+    if (cellValue === '|') {
+      return
+    }
+
     // If cell is empty ("-") or selected ("*"), call /select
     if (cellValue === '-' || cellValue === '*') {
       try {
@@ -176,6 +180,7 @@ export default function Home() {
             const isEmpty = cell === '-'
             const isSelected = cell === '*'
             const isLocked = cell in PENTOMINO_COLORS
+            const isBlocked = cell === '|'
             
             // Determine background color
             let backgroundColor = 'white' // default for empty
@@ -183,7 +188,11 @@ export default function Home() {
               backgroundColor = '#808080' // grey for selected
             } else if (isLocked) {
               backgroundColor = PENTOMINO_COLORS[cell] || 'white'
+            } else if (isBlocked) {
+              backgroundColor = '#000000'
             }
+
+            const textColor = isBlocked ? '#ffffff' : '#000000'
             
             return (
               <div
@@ -193,28 +202,28 @@ export default function Home() {
                   width: '120px',
                   height: '120px',
                   backgroundColor,
-                  color: isLocked ? '#000' : '#000',
+                  color: textColor,
                   display: 'flex',
                   justifyContent: 'center',
                   alignItems: 'center',
                   fontSize: '2rem',
                   fontWeight: 'bold',
                   border: '2px solid #aaa',
-                  cursor: 'pointer',
+                  cursor: isBlocked ? 'default' : 'pointer',
                   transition: 'opacity 0.2s, border 0.2s',
                 }}
                 onMouseEnter={(e) => {
-                  if (isEmpty || isSelected) {
+                  if ((isEmpty || isSelected) && !isBlocked) {
                     e.currentTarget.style.backgroundColor = isSelected ? '#999' : '#f0f0f0'
                   }
                 }}
                 onMouseLeave={(e) => {
-                  if (isEmpty || isSelected) {
+                  if ((isEmpty || isSelected) && !isBlocked) {
                     e.currentTarget.style.backgroundColor = isSelected ? '#808080' : 'white'
                   }
                 }}
               >
-                {isLocked ? cell : ''}
+                {isLocked ? cell : isBlocked ? '|' : ''}
               </div>
             )
           })

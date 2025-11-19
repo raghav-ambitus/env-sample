@@ -24,6 +24,7 @@ _subscribers: set[asyncio.Queue[tuple[str, dict]]] = set()
 
 EMPTY_TILE = "-"
 SELECTED_TILE = "*"
+BLOCKED_TILE = "|"
 
 def _publish(event: str, data: dict) -> None:
     for queue in list(_subscribers):
@@ -246,6 +247,10 @@ async def select_tile(request: Request):
         board[row][col] = EMPTY_TILE
         _publish("level", current_level_obj)
         return {"success": True, "message": "Tile unselected"}
+
+    # Blocked tiles cannot be selected
+    if current_value == BLOCKED_TILE:
+        return {"success": False, "message": "Cannot select blocked tiles"}
 
     # Locked tiles (pentomino letters) are no-ops for selection
     if current_value in pentonimo_letters:
